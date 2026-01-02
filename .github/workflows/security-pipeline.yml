@@ -153,7 +153,7 @@ jobs:
   sca-snyk:
     name: 📦 SCA - Snyk
     runs-on: ubuntu-latest
-    if: ${{ secrets.SNYK_TOKEN != '' }}
+    if: ${{ vars.ENABLE_SNYK == 'true' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
