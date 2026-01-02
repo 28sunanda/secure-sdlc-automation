@@ -492,7 +492,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Comment on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const passed = '${{ needs.security-gate.outputs.gate_passed }}' === 'true';
