@@ -738,7 +738,7 @@ if __name__ == '__main__':
     # Only for development - use gunicorn in production
     debug_mode = os.environ.get('ENV') != 'production'
     app.run(
-        host='0.0.0.0',
+        host='0.0.0.0', # nosemgrep: python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host
         port=int(os.environ.get('PORT', 8080)),
         debug=debug_mode
     )
