@@ -1,0 +1,57 @@
+# Checkov Configuration
+# Infrastructure as Code security scanner
+
+# Frameworks to scan
+framework:
+  - terraform
+  - cloudformation
+  - kubernetes
+  - dockerfile
+  - secrets
+
+# Directories to scan
+directory:
+  - infrastructure/
+
+# Skip specific checks (with justification)
+skip-check:
+  # CKV_AWS_144: S3 cross-region replication - Not required for logs bucket
+  # CKV_AWS_145: S3 KMS encryption - Using SSE-KMS with custom key
+  
+# Soft fail - don't return non-zero exit code
+soft-fail: false
+
+# Output format
+output:
+  - cli
+  - json
+  - sarif
+
+# Output file paths
+output-file-path: security-results/
+
+# Compact output
+compact: false
+
+# Download external modules
+download-external-modules: true
+
+# External modules directory
+external-modules-download-path: .external_modules
+
+# Variable files for Terraform
+var-file:
+  - infrastructure/terraform/terraform.tfvars
+
+# Custom policies directory
+external-checks-dir:
+  - security/checkov-policies/
+
+# Repo ID for Prisma Cloud integration (optional)
+# repo-id: org/repo
+
+# Branch name
+branch: main
+
+# Baseline file for suppressions
+# baseline: .checkov.baseline

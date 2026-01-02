@@ -1,0 +1,38 @@
+# Hadolint Configuration
+# Dockerfile best practices linter
+
+# Ignore specific rules
+ignored:
+  - DL3008  # Pin versions in apt-get install (we use --no-install-recommends)
+  - DL3013  # Pin versions in pip (handled by requirements.txt)
+
+# Treat these rules as errors
+failure-threshold: warning
+
+# Trusted registries
+trustedRegistries:
+  - docker.io
+  - gcr.io
+  - ghcr.io
+  - public.ecr.aws
+
+# Label schema requirements
+label-schema:
+  maintainer: text
+  version: semver
+  description: text
+
+# Strict mode - fail on any warning
+strict-labels: false
+
+# Output format (tty, json, checkstyle, codeclimate, gitlab_codeclimate, gnu, codacy, sonarqube, sarif)
+format: json
+
+# Override rule severities
+override:
+  warning:
+    - DL3042  # Avoid cache dir with pip
+  info:
+    - DL3059  # Multiple consecutive RUN
+  style:
+    - DL3015  # Avoid additional packages with apt-get

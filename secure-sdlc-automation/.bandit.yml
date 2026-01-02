@@ -1,0 +1,42 @@
+# Bandit Configuration
+# Python security linter settings
+
+[bandit]
+# Directories to exclude
+exclude_dirs = [
+    "tests",
+    "venv",
+    ".venv",
+    "node_modules",
+    ".git",
+    "__pycache__",
+    "migrations"
+]
+
+# Test IDs to skip
+skips = [
+    # B101: assert_used - We use asserts in tests
+    # B104: hardcoded_bind_all_interfaces - Handled by container/LB
+]
+
+# Aggregate output by vulnerability type
+aggregate = "vuln"
+
+# Number of context lines to show
+number = 3
+
+# Severity level threshold
+severity = "medium"
+
+# Confidence level threshold  
+confidence = "medium"
+
+# Output format
+format = "json"
+
+# Recursive scan
+recursive = true
+
+# Profile to use (can be: bandit, ShellInjection, SqlInjection, etc.)
+# Leave empty to use all checks
+profile = ""

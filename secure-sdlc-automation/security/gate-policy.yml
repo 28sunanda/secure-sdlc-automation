@@ -1,0 +1,111 @@
+# Security Gate Policy Configuration
+# Defines thresholds that block or warn in CI/CD pipeline
+
+# Blocking conditions - will FAIL the pipeline
+blocking:
+  # Maximum allowed findings by severity (0 = none allowed)
+  critical: 0        # No critical findings allowed
+  high: 0            # No high findings allowed
+  
+  # Specific rules that always block
+  rule_ids:
+    - "sql-injection-formatted-string"
+    - "hardcoded-credentials"
+    - "hardcoded-jwt-secret"
+    - "unsafe-pickle"
+    - "command-injection-os-system"
+  
+  # CWE IDs that always block
+  cwe_ids:
+    - "89"    # SQL Injection
+    - "78"    # OS Command Injection
+    - "798"   # Hardcoded Credentials
+    - "502"   # Deserialization of Untrusted Data
+    - "22"    # Path Traversal
+    - "79"    # XSS (if in critical context)
+  
+  # Always block if secrets are detected
+  secrets: true
+  
+  # Block on specific OWASP categories
+  owasp_categories:
+    - "A03:2021"  # Injection
+    - "A08:2021"  # Software and Data Integrity Failures
+
+# Warning conditions - won't fail but will be reported
+warning:
+  # Thresholds that generate warnings
+  medium: 10         # Warn if more than 10 medium findings
+  low: 50            # Warn if more than 50 low findings
+  total: 100         # Warn if more than 100 total findings
+  
+  # New findings threshold (compared to baseline)
+  new_findings: 5    # Warn if more than 5 new findings
+
+# SLA Configuration (days to remediate)
+sla:
+  critical: 1        # 24 hours
+  high: 7            # 1 week
+  medium: 30         # 1 month
+  low: 90            # 3 months
+  info: null         # No SLA
+
+# Exceptions - findings to ignore (with expiration)
+exceptions:
+  # Example exception format:
+  # - rule_id: "weak-hash-sha1"
+  #   file: "app/legacy/old_module.py"
+  #   reason: "Legacy code scheduled for removal in Q2"
+  #   expires: "2025-06-30"
+  #   approved_by: "security@company.com"
+  []
+
+# Tool-specific configurations
+tool_settings:
+  semgrep:
+    # Minimum severity to consider
+    min_severity: "WARNING"
+    # Rules to ignore
+    ignore_rules:
+      - "generic.secrets.gitleaks.generic-api-key"  # Too noisy
+  
+  trivy:
+    # Ignore unfixed vulnerabilities
+    ignore_unfixed: false
+    # Minimum CVSS score to report
+    min_cvss: 4.0
+  
+  bandit:
+    # Minimum confidence level
+    min_confidence: "MEDIUM"
+    # Skip specific test IDs
+    skip_tests:
+      - "B101"  # assert statements
+
+# Notifications
+notifications:
+  # Slack webhook for critical findings
+  slack:
+    enabled: true
+    webhook_url_env: "SLACK_SECURITY_WEBHOOK"
+    on_failure: true
+    on_warnings: false
+  
+  # Email notifications
+  email:
+    enabled: true
+    recipients:
+      - "security@company.com"
+    on_failure: true
+    on_warnings: true
+
+# Report settings
+reporting:
+  # Generate SARIF report for GitHub Security tab
+  sarif: true
+  # Generate HTML report
+  html: true
+  # Include code snippets in reports
+  include_code: true
+  # Max code snippet length
+  max_snippet_length: 500

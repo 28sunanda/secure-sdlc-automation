@@ -1,0 +1,460 @@
+rules:
+  # ===========================================================================
+  # AUTHENTICATION & SESSION MANAGEMENT
+  # ===========================================================================
+  
+  - id: hardcoded-jwt-secret
+    patterns:
+      - pattern-either:
+          - pattern: |
+              jwt.encode(..., "$SECRET", ...)
+          - pattern: |
+              JWT_SECRET = "..."
+          - pattern: |
+              SECRET_KEY = "..."
+    message: |
+      Hardcoded JWT secret detected. Use environment variables or a secrets manager.
+      This can lead to token forgery if the secret is exposed.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      asvs: "V2.5.4"
+      remediation: |
+        Use environment variables:
+        ```python
+        import os
+        SECRET_KEY = os.environ.get('JWT_SECRET')
+        ```
+
+  - id: missing-session-timeout
+    patterns:
+      - pattern: |
+          app.config['PERMANENT_SESSION_LIFETIME'] = ...
+      - pattern-not: |
+          app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=$X)
+    message: |
+      Session timeout should be configured with a reasonable duration.
+      Recommended: 15-30 minutes for sensitive applications.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-613"
+      owasp: "A07:2021"
+      asvs: "V3.3.1"
+
+  - id: session-without-httponly
+    patterns:
+      - pattern: |
+          app.config['SESSION_COOKIE_HTTPONLY'] = False
+    message: |
+      Session cookie should have HttpOnly flag enabled to prevent XSS-based session theft.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-1004"
+      owasp: "A07:2021"
+
+  - id: session-without-secure-flag
+    patterns:
+      - pattern: |
+          app.config['SESSION_COOKIE_SECURE'] = False
+    message: |
+      Session cookie should have Secure flag enabled in production to prevent transmission over HTTP.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-614"
+      owasp: "A07:2021"
+
+  # ===========================================================================
+  # INJECTION VULNERABILITIES
+  # ===========================================================================
+
+  - id: sql-injection-formatted-string
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $CURSOR.execute(f"...{$VAR}...")
+          - pattern: |
+              $CURSOR.execute("..." + $VAR + "...")
+          - pattern: |
+              $CURSOR.execute("...%s..." % $VAR)
+          - pattern: |
+              $CURSOR.execute("...{}...".format($VAR))
+    message: |
+      Potential SQL injection vulnerability. User input appears to be concatenated into SQL query.
+      Use parameterized queries instead.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+      asvs: "V5.3.4"
+      remediation: |
+        Use parameterized queries:
+        ```python
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        ```
+
+  - id: command-injection-os-system
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD)
+          - pattern: subprocess.call($CMD, shell=True, ...)
+          - pattern: subprocess.run($CMD, shell=True, ...)
+    message: |
+      Potential command injection. Avoid using shell=True or os.system() with user input.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021 - Injection"
+      remediation: |
+        Use subprocess with shell=False and pass arguments as a list:
+        ```python
+        subprocess.run(["ping", "-c", "1", hostname], shell=False)
+        ```
+
+  - id: ldap-injection
+    patterns:
+      - pattern: |
+          $CONN.search(..., f"...{$VAR}...", ...)
+    message: |
+      Potential LDAP injection. Sanitize user input before including in LDAP queries.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-90"
+      owasp: "A03:2021 - Injection"
+
+  - id: xpath-injection
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $TREE.xpath(f"...{$VAR}...")
+          - pattern: |
+              $TREE.xpath("..." + $VAR + "...")
+    message: |
+      Potential XPath injection. Sanitize user input or use parameterized XPath.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-643"
+      owasp: "A03:2021 - Injection"
+
+  # ===========================================================================
+  # CROSS-SITE SCRIPTING (XSS)
+  # ===========================================================================
+
+  - id: flask-xss-render-template-string
+    patterns:
+      - pattern: |
+          render_template_string($TEMPLATE, ..., $VAR=request.$METHOD.get(...), ...)
+    message: |
+      Potential XSS vulnerability. User input is passed to render_template_string.
+      Use render_template with proper escaping instead.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-79"
+      owasp: "A03:2021 - Injection"
+      asvs: "V5.3.3"
+      remediation: |
+        Use render_template with separate HTML files:
+        ```python
+        return render_template('template.html', data=escaped_data)
+        ```
+
+  - id: markupsafe-disabled
+    patterns:
+      - pattern: |
+          Markup($VAR)
+      - pattern-not: |
+          Markup(escape($VAR))
+    message: |
+      Using Markup without escaping can lead to XSS. Always escape user input.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-79"
+      owasp: "A03:2021"
+
+  # ===========================================================================
+  # CRYPTOGRAPHY
+  # ===========================================================================
+
+  - id: weak-hash-md5
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: MD5.new(...)
+    message: |
+      MD5 is cryptographically broken. Use SHA-256 or better for integrity, bcrypt/argon2 for passwords.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-328"
+      owasp: "A02:2021 - Cryptographic Failures"
+      asvs: "V6.2.1"
+
+  - id: weak-hash-sha1
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.sha1(...)
+          - pattern: SHA.new(...)
+    message: |
+      SHA-1 is deprecated for security use. Use SHA-256 or SHA-3.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-328"
+      owasp: "A02:2021"
+
+  - id: insecure-random
+    patterns:
+      - pattern-either:
+          - pattern: random.random()
+          - pattern: random.randint(...)
+          - pattern: random.choice(...)
+    message: |
+      Using non-cryptographic random for security purposes. Use secrets module instead.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-330"
+      owasp: "A02:2021"
+      remediation: |
+        Use secrets module for security-sensitive randomness:
+        ```python
+        import secrets
+        token = secrets.token_urlsafe(32)
+        ```
+
+  - id: weak-rsa-key-size
+    patterns:
+      - pattern: |
+          RSA.generate($SIZE, ...)
+      - metavariable-comparison:
+          metavariable: $SIZE
+          comparison: $SIZE < 2048
+    message: |
+      RSA key size less than 2048 bits is considered weak. Use at least 2048 bits.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-326"
+      owasp: "A02:2021"
+
+  - id: ecb-mode-encryption
+    patterns:
+      - pattern: |
+          AES.new(..., AES.MODE_ECB, ...)
+    message: |
+      ECB mode is insecure - identical plaintext blocks produce identical ciphertext.
+      Use GCM or CBC with proper IV.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-327"
+      owasp: "A02:2021"
+
+  # ===========================================================================
+  # SENSITIVE DATA EXPOSURE
+  # ===========================================================================
+
+  - id: logging-sensitive-data
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $LOGGER.$METHOD(..., password=..., ...)
+          - pattern: |
+              $LOGGER.$METHOD(..., token=..., ...)
+          - pattern: |
+              $LOGGER.$METHOD(..., api_key=..., ...)
+          - pattern: |
+              $LOGGER.$METHOD(..., ssn=..., ...)
+          - pattern: |
+              $LOGGER.$METHOD(..., credit_card=..., ...)
+          - pattern: |
+              print(...password...)
+    message: |
+      Sensitive data may be logged. Ensure PII, credentials, and tokens are not written to logs.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-532"
+      owasp: "A09:2021 - Security Logging and Monitoring Failures"
+      asvs: "V7.1.1"
+
+  - id: hardcoded-credentials
+    patterns:
+      - pattern-either:
+          - pattern: |
+              password = "..."
+          - pattern: |
+              api_key = "..."
+          - pattern: |
+              secret = "..."
+          - pattern: |
+              AWS_SECRET_ACCESS_KEY = "..."
+    message: |
+      Hardcoded credentials detected. Use environment variables or a secrets manager.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798"
+      owasp: "A07:2021"
+
+  # ===========================================================================
+  # INSECURE DESERIALIZATION
+  # ===========================================================================
+
+  - id: unsafe-pickle
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+          - pattern: cPickle.loads(...)
+    message: |
+      Pickle deserialization can execute arbitrary code. Use JSON or other safe formats.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+      remediation: |
+        Use JSON for serialization:
+        ```python
+        import json
+        data = json.loads(user_input)
+        ```
+
+  - id: unsafe-yaml-load
+    patterns:
+      - pattern: yaml.load(..., Loader=yaml.Loader)
+      - pattern: yaml.load($DATA)
+      - pattern-not: yaml.safe_load(...)
+    message: |
+      yaml.load() with default Loader is unsafe. Use yaml.safe_load() instead.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021"
+
+  # ===========================================================================
+  # API SECURITY
+  # ===========================================================================
+
+  - id: missing-rate-limiting
+    patterns:
+      - pattern: |
+          @app.route(...)
+          def $FUNC(...):
+            ...
+      - pattern-not: |
+          @limiter.limit(...)
+          @app.route(...)
+          def $FUNC(...):
+            ...
+    message: |
+      API endpoint may be missing rate limiting. Consider adding rate limiting to prevent abuse.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-770"
+      owasp: "A04:2021 - Insecure Design"
+      asvs: "V13.2.3"
+
+  - id: cors-allow-all
+    patterns:
+      - pattern-either:
+          - pattern: |
+              CORS(app, origins="*")
+          - pattern: |
+              Access-Control-Allow-Origin: "*"
+    message: |
+      CORS allows all origins. Restrict to specific trusted domains in production.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-942"
+      owasp: "A05:2021"
+
+  - id: missing-csrf-protection
+    patterns:
+      - pattern: |
+          WTF_CSRF_ENABLED = False
+    message: |
+      CSRF protection is disabled. Enable it to prevent cross-site request forgery attacks.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-352"
+      owasp: "A01:2021"
+
+  # ===========================================================================
+  # FILE OPERATIONS
+  # ===========================================================================
+
+  - id: path-traversal
+    patterns:
+      - pattern-either:
+          - pattern: |
+              open(request.$METHOD.get(...), ...)
+          - pattern: |
+              send_file(request.$METHOD.get(...))
+          - pattern: |
+              os.path.join($BASE, request.$METHOD.get(...))
+    message: |
+      Potential path traversal vulnerability. Validate and sanitize file paths from user input.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-22"
+      owasp: "A01:2021 - Broken Access Control"
+      remediation: |
+        Validate file path stays within allowed directory:
+        ```python
+        import os
+        safe_path = os.path.realpath(os.path.join(base_dir, filename))
+        if not safe_path.startswith(os.path.realpath(base_dir)):
+            abort(403)
+        ```
+
+  - id: unrestricted-file-upload
+    patterns:
+      - pattern: |
+          $FILE.save(...)
+      - pattern-not-inside: |
+          if allowed_file($FILENAME):
+            ...
+    message: |
+      File upload may not be validating file type. Validate file extension and content type.
+    severity: WARNING
+    metadata:
+      cwe: "CWE-434"
+      owasp: "A04:2021"
+
+  # ===========================================================================
+  # SECURITY MISCONFIGURATION
+  # ===========================================================================
+
+  - id: debug-mode-enabled
+    patterns:
+      - pattern-either:
+          - pattern: |
+              app.run(debug=True)
+          - pattern: |
+              DEBUG = True
+    message: |
+      Debug mode should be disabled in production. It can expose sensitive information.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-489"
+      owasp: "A05:2021 - Security Misconfiguration"
+
+  - id: ssl-verify-disabled
+    patterns:
+      - pattern-either:
+          - pattern: |
+              requests.$METHOD(..., verify=False, ...)
+          - pattern: |
+              urllib3.disable_warnings(...)
+    message: |
+      SSL certificate verification is disabled. This allows man-in-the-middle attacks.
+    severity: ERROR
+    metadata:
+      cwe: "CWE-295"
+      owasp: "A07:2021"
+
+  - id: binding-to-all-interfaces
+    patterns:
+      - pattern: |
+          app.run(host="0.0.0.0", ...)
+    message: |
+      Application binds to all network interfaces. Consider restricting to localhost in development.
+    severity: INFO
+    metadata:
+      cwe: "CWE-1188"
+      owasp: "A05:2021"

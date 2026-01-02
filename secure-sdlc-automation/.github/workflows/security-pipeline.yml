@@ -1,0 +1,571 @@
+name: Enterprise Security Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run daily at 2 AM UTC for continuous monitoring
+    - cron: '0 2 * * *'
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
+  DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+  DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+
+jobs:
+  # ============================================================================
+  # STAGE 1: SECRET DETECTION (Fastest - Run First)
+  # ============================================================================
+  secret-detection:
+    name: 🔑 Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: TruffleHog Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+      - name: Upload Secret Scan Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: secret-scan-results
+          path: |
+            gitleaks-report.json
+            trufflehog-results.json
+
+  # ============================================================================
+  # STAGE 2: STATIC APPLICATION SECURITY TESTING (SAST)
+  # ============================================================================
+  sast-semgrep:
+    name: 🔍 SAST - Semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep with Custom Rules
+        run: |
+          semgrep scan \
+            --config=p/security-audit \
+            --config=p/owasp-top-ten \
+            --config=p/python \
+            --config=p/javascript \
+            --config=p/secrets \
+            --config=p/sql-injection \
+            --config=p/xss \
+            --config=./security/semgrep/custom-rules/ \
+            --sarif \
+            --output=semgrep-results.sarif \
+            --json \
+            --output=semgrep-results.json \
+            --severity=INFO \
+            --verbose
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+
+      - name: Upload Semgrep Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: |
+            semgrep-results.sarif
+            semgrep-results.json
+
+  sast-codeql:
+    name: 🔍 SAST - CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    strategy:
+      matrix:
+        language: [python, javascript]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          config-file: .github/codeql/codeql-config.yml
+          queries: +security-extended,security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  sast-bandit:
+    name: 🔍 SAST - Bandit (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit
+        run: |
+          bandit -r app/ \
+            -f json \
+            -o bandit-results.json \
+            --severity-level medium \
+            --confidence-level medium \
+            -c .bandit.yml || true
+
+      - name: Convert to SARIF
+        run: |
+          pip install bandit-sarif-formatter
+          bandit -r app/ -f sarif -o bandit-results.sarif || true
+
+      - name: Upload Bandit Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-results
+          path: |
+            bandit-results.json
+            bandit-results.sarif
+
+  # ============================================================================
+  # STAGE 3: SOFTWARE COMPOSITION ANALYSIS (SCA)
+  # ============================================================================
+  sca-dependencies:
+    name: 📦 SCA - Dependency Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install safety pip-audit cyclonedx-bom
+
+      - name: Safety Check
+        run: |
+          safety check \
+            --full-report \
+            --json \
+            --output safety-results.json \
+            -r requirements.txt || true
+
+      - name: pip-audit Check
+        run: |
+          pip-audit \
+            --format json \
+            --output pip-audit-results.json \
+            -r requirements.txt || true
+
+      - name: OSV Scanner
+        uses: google/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            --lockfile=requirements.txt
+            --format=json
+            --output=osv-results.json
+        continue-on-error: true
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          cyclonedx-py requirements \
+            --input-file requirements.txt \
+            --output-format json \
+            --output-file sbom.json
+
+      - name: Upload SCA Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sca-results
+          path: |
+            safety-results.json
+            pip-audit-results.json
+            osv-results.json
+            sbom.json
+
+  sca-snyk:
+    name: 📦 SCA - Snyk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Snyk Open Source
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --sarif-file-output=snyk-results.sarif --json-file-output=snyk-results.json
+
+      - name: Run Snyk Code (SAST)
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: code test
+          args: --sarif-file-output=snyk-code-results.sarif
+
+      - name: Upload Snyk Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snyk-results
+          path: |
+            snyk-results.sarif
+            snyk-results.json
+            snyk-code-results.sarif
+
+  # ============================================================================
+  # STAGE 4: INFRASTRUCTURE AS CODE (IaC) SCANNING
+  # ============================================================================
+  iac-scanning:
+    name: 🏗️ IaC Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkov Scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infrastructure/
+          framework: terraform,cloudformation,kubernetes,dockerfile
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: true
+          config_file: .checkov.yaml
+
+      - name: tfsec Scan
+        uses: aquasecurity/tfsec-sarif-action@v0.1.4
+        with:
+          sarif_file: tfsec-results.sarif
+          working_directory: infrastructure/terraform/
+        continue-on-error: true
+
+      - name: Upload IaC Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iac-results
+          path: |
+            checkov-results.sarif
+            tfsec-results.sarif
+
+  # ============================================================================
+  # STAGE 5: CONTAINER SECURITY
+  # ============================================================================
+  container-scanning:
+    name: 🐳 Container Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Hadolint (Dockerfile Linting)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: infrastructure/docker/Dockerfile
+          config: .hadolint.yaml
+          format: sarif
+          output-file: hadolint-results.sarif
+
+      - name: Build Container Image
+        run: |
+          docker build -t app:${{ github.sha }} -f infrastructure/docker/Dockerfile .
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: app:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-container-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          vuln-type: 'os,library'
+
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Grype Container Scan
+        uses: anchore/scan-action@v3
+        with:
+          image: app:${{ github.sha }}
+          output-format: sarif
+          fail-build: false
+
+      - name: Upload Container Scan Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-results
+          path: |
+            hadolint-results.sarif
+            trivy-container-results.sarif
+            trivy-fs-results.sarif
+            results.sarif
+
+  # ============================================================================
+  # STAGE 6: DYNAMIC APPLICATION SECURITY TESTING (DAST)
+  # Only runs on PR to main or manual trigger
+  # ============================================================================
+  dast-scanning:
+    name: 🌐 DAST - OWASP ZAP
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    needs: [secret-detection, sast-semgrep, sca-dependencies]
+    services:
+      app:
+        image: app:${{ github.sha }}
+        ports:
+          - 8080:8080
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for App to Start
+        run: |
+          timeout 60 bash -c 'until curl -s http://localhost:8080/health; do sleep 2; done'
+
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: 'http://localhost:8080'
+          rules_file_name: 'zap/zap-rules.tsv'
+          cmd_options: '-a -j -l WARN'
+          artifact_name: 'zap-baseline-results'
+
+      - name: OWASP ZAP API Scan
+        uses: zaproxy/action-api-scan@v0.5.0
+        with:
+          target: 'http://localhost:8080/openapi.json'
+          format: openapi
+          cmd_options: '-a -j'
+          artifact_name: 'zap-api-results'
+
+      - name: Nuclei Scan
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: 'http://localhost:8080'
+          templates: './security/nuclei-templates/'
+          output: nuclei-results.txt
+          sarif-export: nuclei-results.sarif
+
+      - name: Upload DAST Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dast-results
+          path: |
+            zap-baseline-results/
+            zap-api-results/
+            nuclei-results.sarif
+
+  # ============================================================================
+  # STAGE 7: COMPLIANCE VALIDATION
+  # ============================================================================
+  compliance-check:
+    name: 📋 Compliance Validation
+    runs-on: ubuntu-latest
+    needs: [sast-semgrep, sca-dependencies, iac-scanning]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install compliance tools
+        run: pip install pyyaml
+
+      - name: Validate OWASP ASVS Controls
+        run: |
+          python scripts/compliance-check.py \
+            --framework owasp-asvs \
+            --mapping security/compliance/owasp-asvs-mapping.yml \
+            --output compliance-asvs-report.json
+
+      - name: Validate NIST 800-53 Controls
+        run: |
+          python scripts/compliance-check.py \
+            --framework nist-800-53 \
+            --mapping security/compliance/nist-800-53-mapping.yml \
+            --output compliance-nist-report.json
+
+      - name: Upload Compliance Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-reports
+          path: |
+            compliance-asvs-report.json
+            compliance-nist-report.json
+
+  # ============================================================================
+  # STAGE 8: AGGREGATE RESULTS & VULNERABILITY MANAGEMENT
+  # ============================================================================
+  aggregate-results:
+    name: 📊 Aggregate & Report
+    runs-on: ubuntu-latest
+    needs: [secret-detection, sast-semgrep, sast-bandit, sca-dependencies, container-scanning, iac-scanning, compliance-check]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: security-results/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install requests pyyaml
+
+      - name: Aggregate and Triage Findings
+        run: |
+          python scripts/vulnerability-triage.py \
+            --input-dir security-results/ \
+            --output aggregated-findings.json \
+            --sla-config security/sla-policy.yml
+
+      - name: Import to DefectDojo
+        if: env.DEFECTDOJO_URL != ''
+        run: |
+          python scripts/defectdojo-import.py \
+            --url ${{ env.DEFECTDOJO_URL }} \
+            --api-key ${{ env.DEFECTDOJO_API_KEY }} \
+            --findings aggregated-findings.json \
+            --product "Enterprise App" \
+            --engagement "CI/CD Scan - ${{ github.run_id }}"
+
+      - name: Generate Security Metrics
+        run: |
+          python scripts/metrics-export.py \
+            --findings aggregated-findings.json \
+            --output security-metrics.json
+
+      - name: Check Security Gate
+        id: security-gate
+        run: |
+          python scripts/security-gate.py \
+            --findings aggregated-findings.json \
+            --policy security/gate-policy.yml
+
+      - name: Upload Final Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-security-report
+          path: |
+            aggregated-findings.json
+            security-metrics.json
+
+      - name: Post Summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const metrics = JSON.parse(fs.readFileSync('security-metrics.json', 'utf8'));
+            
+            const summary = `## 🛡️ Security Scan Summary
+            
+            | Severity | Count | SLA Status |
+            |----------|-------|------------|
+            | 🔴 Critical | ${metrics.critical} | ${metrics.critical > 0 ? '❌ BLOCKING' : '✅ Pass'} |
+            | 🟠 High | ${metrics.high} | ${metrics.high > 0 ? '❌ BLOCKING' : '✅ Pass'} |
+            | 🟡 Medium | ${metrics.medium} | ✅ Pass |
+            | 🟢 Low | ${metrics.low} | ✅ Pass |
+            
+            **Total Findings:** ${metrics.total}
+            **New Findings:** ${metrics.new}
+            **Fixed:** ${metrics.fixed}
+            
+            [View Full Report](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+  # ============================================================================
+  # STAGE 9: ALERTING
+  # ============================================================================
+  notify:
+    name: 🔔 Notify
+    runs-on: ubuntu-latest
+    needs: [aggregate-results]
+    if: always() && (needs.aggregate-results.outputs.critical_count > 0 || failure())
+    steps:
+      - name: Slack Notification (Critical Findings)
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              "text": "🚨 Security Alert: Critical vulnerabilities detected",
+              "attachments": [{
+                "color": "danger",
+                "fields": [
+                  { "title": "Repository", "value": "${{ github.repository }}", "short": true },
+                  { "title": "Branch", "value": "${{ github.ref_name }}", "short": true },
+                  { "title": "Triggered by", "value": "${{ github.actor }}", "short": true },
+                  { "title": "Action", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>", "short": true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_SECURITY_WEBHOOK }}

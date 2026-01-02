@@ -1,0 +1,130 @@
+# Docker Compose Configuration for Local Development
+# Includes application, database, and security scanning tools
+
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # APPLICATION
+  # ==========================================================================
+  app:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: production
+    container_name: enterprise-app
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=development
+      - SECRET_KEY=${SECRET_KEY:-development-secret-key-change-in-prod}
+      - DATABASE_URL=postgresql://appuser:apppassword@db:5432/appdb
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - app-network
+    # Security: Read-only root filesystem
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/log/app
+    # Security: Drop all capabilities
+    cap_drop:
+      - ALL
+    # Security: No new privileges
+    security_opt:
+      - no-new-privileges:true
+
+  # ==========================================================================
+  # DATABASE
+  # ==========================================================================
+  db:
+    image: postgres:15-alpine
+    container_name: enterprise-db
+    environment:
+      - POSTGRES_USER=appuser
+      - POSTGRES_PASSWORD=apppassword
+      - POSTGRES_DB=appdb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+    # Security: Don't expose database port externally
+    # ports:
+    #   - "5432:5432"
+
+  # ==========================================================================
+  # SECURITY SCANNING TOOLS (for local development)
+  # ==========================================================================
+  
+  # OWASP ZAP for DAST
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    container_name: zap-scanner
+    command: zap.sh -daemon -host 0.0.0.0 -port 8090 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
+    ports:
+      - "8090:8090"
+    networks:
+      - app-network
+    profiles:
+      - security
+
+  # DefectDojo for vulnerability management
+  defectdojo:
+    image: defectdojo/defectdojo-django:latest
+    container_name: defectdojo
+    environment:
+      - DD_DEBUG=False
+      - DD_DJANGO_ADMIN_ENABLED=True
+      - DD_SECRET_KEY=${DD_SECRET_KEY:-defectdojo-secret-key}
+      - DD_CREDENTIAL_AES_256_KEY=${DD_CREDENTIAL_AES_256_KEY:-credential-key-32-chars-here!!}
+      - DD_DATABASE_URL=postgresql://defectdojo:defectdojo@defectdojo-db:5432/defectdojo
+    ports:
+      - "8081:8080"
+    depends_on:
+      - defectdojo-db
+    networks:
+      - app-network
+    profiles:
+      - security
+
+  defectdojo-db:
+    image: postgres:15-alpine
+    container_name: defectdojo-db
+    environment:
+      - POSTGRES_USER=defectdojo
+      - POSTGRES_PASSWORD=defectdojo
+      - POSTGRES_DB=defectdojo
+    volumes:
+      - defectdojo-data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    profiles:
+      - security
+
+# ==========================================================================
+# NETWORKS
+# ==========================================================================
+networks:
+  app-network:
+    driver: bridge
+
+# ==========================================================================
+# VOLUMES
+# ==========================================================================
+volumes:
+  postgres-data:
+  defectdojo-data:

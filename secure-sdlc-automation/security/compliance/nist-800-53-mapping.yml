@@ -1,0 +1,291 @@
+# NIST 800-53 Rev 5 Compliance Mapping
+# Maps security controls to their implementation in the DevSecOps pipeline
+
+metadata:
+  standard: "NIST SP 800-53"
+  revision: "5"
+  last_updated: "2025-01-01"
+  baseline: "Moderate"  # Low, Moderate, or High
+
+# Access Control (AC)
+ac_access_control:
+  AC-2:
+    title: "Account Management"
+    implementation:
+      - "User authentication module with role-based access"
+      - "Session management with timeout"
+      - "Audit logging of all authentication events"
+    evidence:
+      - "app/main.py - Authentication endpoints"
+      - "security/semgrep/custom-rules/python-security.yaml"
+    status: IMPLEMENTED
+
+  AC-3:
+    title: "Access Enforcement"
+    implementation:
+      - "RBAC decorator for endpoint protection"
+      - "Object-level authorization checks"
+    evidence:
+      - "app/main.py - require_auth, require_role decorators"
+    status: IMPLEMENTED
+
+  AC-6:
+    title: "Least Privilege"
+    implementation:
+      - "Container runs as non-root user"
+      - "Minimal IAM permissions in Terraform"
+      - "Database user with limited privileges"
+    evidence:
+      - "infrastructure/docker/Dockerfile"
+      - "infrastructure/terraform/main.tf"
+    status: IMPLEMENTED
+
+  AC-7:
+    title: "Unsuccessful Logon Attempts"
+    implementation:
+      - "Account lockout after 5 failed attempts"
+      - "15-minute lockout duration"
+      - "Audit logging of failed attempts"
+    evidence:
+      - "app/main.py - login endpoint"
+    status: IMPLEMENTED
+
+# Audit and Accountability (AU)
+au_audit:
+  AU-2:
+    title: "Event Logging"
+    implementation:
+      - "Comprehensive audit logging"
+      - "CloudWatch log aggregation"
+      - "VPC Flow Logs enabled"
+    evidence:
+      - "app/main.py - audit_log function"
+      - "infrastructure/terraform/main.tf - aws_flow_log"
+    status: IMPLEMENTED
+
+  AU-3:
+    title: "Content of Audit Records"
+    implementation:
+      - "Logs include: user, action, timestamp, IP, resource"
+      - "Structured JSON logging"
+    evidence:
+      - "app/main.py - audit_log table schema"
+    status: IMPLEMENTED
+
+  AU-6:
+    title: "Audit Record Review, Analysis, and Reporting"
+    implementation:
+      - "Security metrics dashboard"
+      - "Automated alerting for critical events"
+    evidence:
+      - "scripts/metrics-export.py"
+      - ".github/workflows/security-pipeline.yml - notify job"
+    status: IMPLEMENTED
+
+  AU-9:
+    title: "Protection of Audit Information"
+    implementation:
+      - "CloudWatch logs encrypted with KMS"
+      - "S3 access logs with versioning"
+    evidence:
+      - "infrastructure/terraform/main.tf - aws_kms_key.logs"
+    status: IMPLEMENTED
+
+# Security Assessment and Authorization (CA)
+ca_assessment:
+  CA-2:
+    title: "Security Assessments"
+    implementation:
+      - "Automated SAST/DAST in CI/CD"
+      - "Regular vulnerability scanning"
+      - "Compliance validation checks"
+    evidence:
+      - ".github/workflows/security-pipeline.yml"
+    status: IMPLEMENTED
+
+  CA-7:
+    title: "Continuous Monitoring"
+    implementation:
+      - "Daily scheduled security scans"
+      - "Dependency vulnerability monitoring"
+      - "Security metrics tracking"
+    evidence:
+      - ".github/workflows/security-pipeline.yml - schedule"
+    status: IMPLEMENTED
+
+# Configuration Management (CM)
+cm_configuration:
+  CM-2:
+    title: "Baseline Configuration"
+    implementation:
+      - "Infrastructure as Code (Terraform)"
+      - "Container image with fixed dependencies"
+      - "Version-pinned requirements"
+    evidence:
+      - "infrastructure/terraform/"
+      - "requirements.txt"
+    status: IMPLEMENTED
+
+  CM-6:
+    title: "Configuration Settings"
+    implementation:
+      - "Checkov IaC scanning"
+      - "Hadolint Dockerfile linting"
+      - "Security headers configuration"
+    evidence:
+      - ".checkov.yaml"
+      - ".hadolint.yaml"
+    status: IMPLEMENTED
+
+  CM-7:
+    title: "Least Functionality"
+    implementation:
+      - "Minimal container image (slim base)"
+      - "Removed unnecessary packages"
+      - "Dropped container capabilities"
+    evidence:
+      - "infrastructure/docker/Dockerfile"
+      - "docker-compose.yml - cap_drop: ALL"
+    status: IMPLEMENTED
+
+# Identification and Authentication (IA)
+ia_identification:
+  IA-2:
+    title: "Identification and Authentication"
+    implementation:
+      - "Token-based authentication"
+      - "Password complexity requirements"
+      - "Session token generation"
+    evidence:
+      - "app/main.py - login, authentication"
+    status: IMPLEMENTED
+
+  IA-5:
+    title: "Authenticator Management"
+    implementation:
+      - "Salted password hashing"
+      - "Cryptographically secure token generation"
+      - "Password strength validation"
+    evidence:
+      - "app/main.py - hash_password, validate_password_strength"
+    status: IMPLEMENTED
+
+# Risk Assessment (RA)
+ra_risk:
+  RA-5:
+    title: "Vulnerability Scanning"
+    implementation:
+      - "SAST: Semgrep, Bandit, CodeQL"
+      - "SCA: Safety, Snyk, OSV-Scanner"
+      - "DAST: OWASP ZAP, Nuclei"
+      - "Container: Trivy, Grype"
+      - "IaC: Checkov, tfsec"
+    evidence:
+      - ".github/workflows/security-pipeline.yml"
+    status: IMPLEMENTED
+
+# System and Communications Protection (SC)
+sc_protection:
+  SC-8:
+    title: "Transmission Confidentiality and Integrity"
+    implementation:
+      - "TLS 1.3 enforcement on ALB"
+      - "HTTPS redirect"
+      - "Secure cookie attributes"
+    evidence:
+      - "infrastructure/terraform/main.tf - ssl_policy"
+      - "app/main.py - cookie configuration"
+    status: IMPLEMENTED
+
+  SC-12:
+    title: "Cryptographic Key Establishment and Management"
+    implementation:
+      - "AWS KMS for key management"
+      - "Automatic key rotation enabled"
+      - "Secrets Manager for credentials"
+    evidence:
+      - "infrastructure/terraform/main.tf - aws_kms_key"
+    status: IMPLEMENTED
+
+  SC-13:
+    title: "Cryptographic Protection"
+    implementation:
+      - "SHA-256 for password hashing"
+      - "Semgrep rules detect weak crypto"
+      - "TLS 1.3 for transport"
+    evidence:
+      - "security/semgrep/custom-rules/python-security.yaml"
+    status: IMPLEMENTED
+
+  SC-28:
+    title: "Protection of Information at Rest"
+    implementation:
+      - "RDS encryption with KMS"
+      - "S3 server-side encryption"
+      - "EBS encryption"
+    evidence:
+      - "infrastructure/terraform/main.tf - storage_encrypted"
+    status: IMPLEMENTED
+
+# System and Information Integrity (SI)
+si_integrity:
+  SI-2:
+    title: "Flaw Remediation"
+    implementation:
+      - "SLA-based vulnerability management"
+      - "Automated dependency updates"
+      - "DefectDojo integration for tracking"
+    evidence:
+      - "security/sla-policy.yml"
+      - "scripts/defectdojo-import.py"
+    status: IMPLEMENTED
+
+  SI-3:
+    title: "Malicious Code Protection"
+    implementation:
+      - "Secret detection in CI/CD"
+      - "Dependency vulnerability scanning"
+      - "Container image scanning"
+    evidence:
+      - ".github/workflows/security-pipeline.yml"
+    status: IMPLEMENTED
+
+  SI-4:
+    title: "System Monitoring"
+    implementation:
+      - "CloudWatch monitoring"
+      - "Security metrics dashboard"
+      - "Alerting for critical events"
+    evidence:
+      - "scripts/metrics-export.py"
+      - "infrastructure/terraform/main.tf"
+    status: IMPLEMENTED
+
+  SI-10:
+    title: "Information Input Validation"
+    implementation:
+      - "Semgrep input validation rules"
+      - "Parameterized database queries"
+      - "Request validation"
+    evidence:
+      - "security/semgrep/custom-rules/python-security.yaml"
+      - "app/main.py - parameterized queries"
+    status: IMPLEMENTED
+
+# Summary
+summary:
+  total_controls: 25
+  implemented: 25
+  partial: 0
+  not_implemented: 0
+  coverage_percentage: 100
+  
+  by_family:
+    AC: 4
+    AU: 4
+    CA: 2
+    CM: 3
+    IA: 2
+    RA: 1
+    SC: 5
+    SI: 4

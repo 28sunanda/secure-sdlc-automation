@@ -1,0 +1,83 @@
+# Pre-commit hooks configuration
+# Run security checks before code is committed
+# Install: pip install pre-commit && pre-commit install
+
+repos:
+  # General checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: detect-aws-credentials
+
+  # Secret Detection
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.1
+    hooks:
+      - id: gitleaks
+
+  # Python Security - Bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.6
+    hooks:
+      - id: bandit
+        args: ["-c", ".bandit.yml", "-r", "app/"]
+        files: ^app/
+
+  # SAST - Semgrep (fast rules only for pre-commit)
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.52.0
+    hooks:
+      - id: semgrep
+        args: 
+          - --config=p/secrets
+          - --config=p/security-audit
+          - --error
+          - --skip-unknown-extensions
+
+  # Dockerfile Linting
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint
+        args: ['--config', '.hadolint.yaml']
+
+  # Python Code Formatting
+  - repo: https://github.com/psf/black
+    rev: 23.11.0
+    hooks:
+      - id: black
+        language_version: python3.11
+
+  # Python Linting
+  - repo: https://github.com/PyCQA/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        additional_dependencies:
+          - flake8-bugbear
+          - flake8-security
+
+  # Terraform Formatting
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.83.6
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+      - id: terraform_tfsec
+        args:
+          - --args=--soft-fail
+
+  # YAML Linting
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.33.0
+    hooks:
+      - id: yamllint
+        args: ['-c', '.yamllint.yml']
