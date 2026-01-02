@@ -2,21 +2,21 @@
 # Security: Pin all versions to prevent supply chain attacks
 
 # Web Framework
-flask==3.0.0
+flask==3.1.2
 gunicorn==21.2.0
 
 # Security
 flask-limiter==3.5.0
 flask-cors==4.0.0
-pyjwt==2.8.0
+pyjwt==2.10.1
 
 # Database
 # Note: Using sqlite for demo; use psycopg2-binary for PostgreSQL in production
 
 # Utilities
-python-dotenv==1.0.0
-pyyaml==6.0.1
-requests==2.31.0
+python-dotenv==1.2.1
+pyyaml==6.0.3
+requests==2.32.5
 
 # Development/Testing (comment out in production)
 # pytest==7.4.3
