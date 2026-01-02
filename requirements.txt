@@ -3,7 +3,7 @@
 
 # Web Framework
 flask==3.0.0
-gunicorn==21.2.0
+gunicorn==23.0.0
 
 # Security
 flask-limiter==3.5.0
