@@ -1,6 +1,6 @@
 # 🛡️ Secure SDLC Automation
 
-> End-to-end security automation across the Software Development Lifecycle — from pre-commit hooks to production monitoring, with integrated vulnerability management and compliance-as-code.
+> End-to-end security automation across the Software Development Lifecycle - from pre-commit hooks to production monitoring, with integrated vulnerability management and compliance-as-code.
 
 [![Security Pipeline](https://github.com/YOUR_USERNAME/secure-sdlc-automation/actions/workflows/security-pipeline.yml/badge.svg)](https://github.com/YOUR_USERNAME/secure-sdlc-automation/actions)
 [![OWASP ASVS](https://img.shields.io/badge/OWASP%20ASVS-Level%202-green)](https://owasp.org/www-project-application-security-verification-standard/)
