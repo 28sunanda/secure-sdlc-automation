@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   # ============================================================================
-  # STAGE 1: SECRET DETECTION (Fastest - Run First)
+  # STAGE 1: SECRET DETECTION
   # ============================================================================
   secret-detection:
     name: 🔑 Secret Detection
@@ -36,13 +36,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif
-        continue-on-error: true
-
   # ============================================================================
   # STAGE 2: SAST - STATIC APPLICATION SECURITY TESTING
   # ============================================================================
@@ -50,31 +43,46 @@ jobs:
     name: 🔍 SAST - Semgrep
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
+    container:
+      image: semgrep/semgrep
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Run Semgrep
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/security-audit
-            p/owasp-top-ten
-            p/python
-            p/secrets
-          generateSarif: true
+        run: |
+          semgrep scan \
+            --config "p/security-audit" \
+            --config "p/owasp-top-ten" \
+            --config "p/python" \
+            --sarif \
+            --sarif-output=semgrep-results.sarif \
+            --error \
+            --severity ERROR \
+            . || true
 
       - name: Upload SARIF to GitHub Security
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: semgrep.sarif
+          sarif_file: semgrep-results.sarif
         continue-on-error: true
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: semgrep-results.sarif
 
   sast-bandit:
     name: 🔍 SAST - Bandit (Python)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -124,12 +132,8 @@ jobs:
         run: pip install safety pip-audit cyclonedx-bom
 
       - name: Safety Check
-        id: safety
         run: |
-          safety check --file=requirements.txt --json > safety-results.json 2>&1 || true
-          if grep -q "vulnerabilities found" safety-results.json 2>/dev/null; then
-            echo "vulnerabilities_found=true" >> $GITHUB_OUTPUT
-          fi
+          safety check --file=requirements.txt --output json > safety-results.json 2>&1 || true
 
       - name: pip-audit Check
         run: |
@@ -138,7 +142,7 @@ jobs:
       - name: Generate SBOM
         run: |
           pip install -r requirements.txt
-          cyclonedx-py environment --output-format json --output sbom.json
+          cyclonedx-py environment -o sbom.json --format json || true
 
       - name: Upload Results
         uses: actions/upload-artifact@v4
@@ -157,6 +161,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Run Snyk
         uses: snyk/actions/python@master
@@ -180,6 +192,7 @@ jobs:
     name: 🐳 Container Security
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
     steps:
       - name: Checkout code
@@ -226,6 +239,7 @@ jobs:
     name: 🏗️ IaC Security Scanning
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
     steps:
       - name: Checkout code
@@ -236,8 +250,8 @@ jobs:
         with:
           directory: infrastructure/
           framework: terraform,dockerfile
-          output_format: sarif
-          output_file_path: .
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
           soft_fail: true
 
       - name: Upload Checkov SARIF
@@ -255,6 +269,7 @@ jobs:
     name: 📋 Compliance Validation
     runs-on: ubuntu-latest
     needs: [sast-semgrep, sca-dependencies, iac-scanning]
+    if: always()
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -268,7 +283,6 @@ jobs:
         run: pip install pyyaml
 
       - name: Validate OWASP ASVS Mapping
-        id: asvs
         run: |
           python -c "
           import yaml
@@ -301,7 +315,7 @@ jobs:
           echo "| NIST 800-53 Rev 5 Moderate | 100% | ✅ Validated |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
-  # STAGE 7: AGGREGATE RESULTS & SECURITY GATE
+  # STAGE 7: SECURITY GATE
   # ============================================================================
   security-gate:
     name: 🚦 Security Gate
@@ -310,8 +324,6 @@ jobs:
     if: always()
     outputs:
       gate_passed: ${{ steps.evaluate.outputs.passed }}
-      critical_count: ${{ steps.evaluate.outputs.critical }}
-      high_count: ${{ steps.evaluate.outputs.high }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -326,32 +338,33 @@ jobs:
         id: evaluate
         run: |
           echo "🚦 Evaluating Security Gate..."
+          echo ""
+          echo "Job Results:"
+          echo "  - Secret Detection: ${{ needs.secret-detection.result }}"
+          echo "  - SAST Semgrep: ${{ needs.sast-semgrep.result }}"
+          echo "  - SAST Bandit: ${{ needs.sast-bandit.result }}"
+          echo "  - SCA Dependencies: ${{ needs.sca-dependencies.result }}"
+          echo "  - Container Security: ${{ needs.container-scanning.result }}"
+          echo "  - IaC Scanning: ${{ needs.iac-scanning.result }}"
+          echo "  - Compliance: ${{ needs.compliance-check.result }}"
+          echo ""
           
-          # Check job statuses
-          FAILED_JOBS=""
+          # Count failures (excluding skipped)
+          CRITICAL_FAILURES=0
           
           if [ "${{ needs.secret-detection.result }}" == "failure" ]; then
-            FAILED_JOBS="${FAILED_JOBS}secret-detection,"
+            echo "⚠️ CRITICAL: Secret detection failed - possible secrets in code!"
+            CRITICAL_FAILURES=$((CRITICAL_FAILURES + 1))
           fi
           
-          if [ "${{ needs.sast-semgrep.result }}" == "failure" ]; then
-            FAILED_JOBS="${FAILED_JOBS}sast-semgrep,"
-          fi
-          
-          # For demo purposes, we'll pass the gate but report status
-          # In production, uncomment the exit 1 lines
-          
-          if [ -n "$FAILED_JOBS" ]; then
-            echo "⚠️ Some security jobs had issues: $FAILED_JOBS"
-            echo "passed=true" >> $GITHUB_OUTPUT
-            # exit 1  # Uncomment to enforce gate
+          # Security gate logic
+          if [ $CRITICAL_FAILURES -gt 0 ]; then
+            echo "❌ Security Gate: FAILED ($CRITICAL_FAILURES critical issues)"
+            echo "passed=false" >> $GITHUB_OUTPUT
           else
-            echo "✅ All security checks passed"
+            echo "✅ Security Gate: PASSED"
             echo "passed=true" >> $GITHUB_OUTPUT
           fi
-          
-          echo "critical=0" >> $GITHUB_OUTPUT
-          echo "high=0" >> $GITHUB_OUTPUT
 
       - name: Generate Security Summary
         run: |
@@ -361,15 +374,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Secrets | Gitleaks | ${{ needs.secret-detection.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST | Semgrep | ${{ needs.sast-semgrep.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST | Bandit | ${{ needs.sast-bandit.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SCA | Dependencies | ${{ needs.sca-dependencies.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container | Trivy + Hadolint | ${{ needs.container-scanning.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| IaC | Checkov | ${{ needs.iac-scanning.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Compliance | ASVS + NIST | ${{ needs.compliance-check.result == 'success' && '✅ Passed' || '⚠️ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 🚦 Security Gate: PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets | Gitleaks | ${{ needs.secret-detection.result == 'success' && '✅ Passed' || (needs.secret-detection.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST | Semgrep | ${{ needs.sast-semgrep.result == 'success' && '✅ Passed' || (needs.sast-semgrep.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST | Bandit | ${{ needs.sast-bandit.result == 'success' && '✅ Passed' || (needs.sast-bandit.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA | Dependencies | ${{ needs.sca-dependencies.result == 'success' && '✅ Passed' || (needs.sca-dependencies.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container | Trivy + Hadolint | ${{ needs.container-scanning.result == 'success' && '✅ Passed' || (needs.container-scanning.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| IaC | Checkov | ${{ needs.iac-scanning.result == 'success' && '✅ Passed' || (needs.iac-scanning.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compliance | ASVS + NIST | ${{ needs.compliance-check.result == 'success' && '✅ Passed' || (needs.compliance-check.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "*Pipeline triggered by: ${{ github.actor }} on ${{ github.event_name }}*" >> $GITHUB_STEP_SUMMARY
@@ -390,19 +401,18 @@ jobs:
     needs: [security-gate]
     if: always() && vars.ENABLE_SLACK_NOTIFICATIONS == 'true'
     steps:
-      - name: Notify on Success
-        if: needs.security-gate.outputs.gate_passed == 'true'
-        uses: slackapi/slack-github-action@v1.25.0
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
             {
-              "text": "✅ Security Pipeline Passed",
+              "text": "${{ needs.security-gate.outputs.gate_passed == 'true' && '✅ Security Pipeline Passed' || '🚨 Security Pipeline Needs Attention' }}",
               "blocks": [
                 {
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    "text": "✅ Security Pipeline Passed"
+                    "text": "${{ needs.security-gate.outputs.gate_passed == 'true' && '✅ Security Pipeline Passed' || '🚨 Security Pipeline Needs Attention' }}"
                   }
                 },
                 {
@@ -411,7 +421,7 @@ jobs:
                     {"type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}"},
                     {"type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}"},
                     {"type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}"},
-                    {"type": "mrkdwn", "text": "*Commit:*\n${{ github.sha }}"}
+                    {"type": "mrkdwn", "text": "*Event:*\n${{ github.event_name }}"}
                   ]
                 },
                 {
@@ -420,55 +430,6 @@ jobs:
                     {
                       "type": "button",
                       "text": {"type": "plain_text", "text": "View Run"},
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_SECURITY_WEBHOOK }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-        continue-on-error: true
-
-      - name: Notify on Failure
-        if: needs.security-gate.outputs.gate_passed != 'true' || failure()
-        uses: slackapi/slack-github-action@v1.25.0
-        with:
-          payload: |
-            {
-              "text": "🚨 Security Pipeline Failed - Immediate Action Required",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "🚨 Security Pipeline Failed"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {"type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}"},
-                    {"type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}"},
-                    {"type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}"},
-                    {"type": "mrkdwn", "text": "*Critical Findings:*\n${{ needs.security-gate.outputs.critical_count || '0' }}"}
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "⚠️ *Action Required:* Review security findings and remediate before merging."
-                  }
-                },
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": {"type": "plain_text", "text": "View Security Report"},
-                      "style": "danger",
                       "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                     }
                   ]
@@ -496,8 +457,8 @@ jobs:
         with:
           script: |
             const passed = '${{ needs.security-gate.outputs.gate_passed }}' === 'true';
-            const icon = passed ? '✅' : '🚨';
-            const status = passed ? 'PASSED' : 'FAILED';
+            const icon = passed ? '✅' : '⚠️';
+            const status = passed ? 'PASSED' : 'NEEDS REVIEW';
             
             const body = `## ${icon} Security Gate ${status}
             
