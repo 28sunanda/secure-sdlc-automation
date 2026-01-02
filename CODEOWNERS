@@ -1,0 +1,75 @@
+# CODEOWNERS - Security Review Requirements
+# 
+# This file defines who must review changes to security-sensitive files.
+# In an enterprise setting, this ensures security team approval for critical changes.
+#
+# Format: <pattern> <owner1> <owner2> ...
+# Owners are automatically requested for review when matching files change.
+
+# ============================================================================
+# DEFAULT OWNER - All files
+# ============================================================================
+* @28sunanda
+
+# ============================================================================
+# SECURITY CONFIGURATIONS - Require security team review
+# ============================================================================
+
+# Security scanning configurations
+/.github/workflows/security-pipeline.yml @28sunanda
+/.gitleaks.toml @28sunanda
+/.bandit.yml @28sunanda
+/.checkov.yaml @28sunanda
+/.hadolint.yaml @28sunanda
+/.pre-commit-config.yaml @28sunanda
+
+# Security policies and rules
+/security/ @28sunanda
+
+# Custom Semgrep rules - critical for security coverage
+/security/semgrep/ @28sunanda
+
+# Compliance mappings - changes affect audit evidence
+/security/compliance/ @28sunanda
+
+# ============================================================================
+# INFRASTRUCTURE - Require security + platform review
+# ============================================================================
+
+# Terraform (infrastructure changes)
+/infrastructure/terraform/ @28sunanda
+
+# Docker configurations
+/infrastructure/docker/ @28sunanda
+
+# Kubernetes manifests (if added)
+/infrastructure/kubernetes/ @28sunanda
+
+# ============================================================================
+# APPLICATION SECURITY - Require security review
+# ============================================================================
+
+# Authentication and authorization code
+/app/auth/ @28sunanda
+/app/main.py @28sunanda
+
+# Any file containing security-related keywords
+**/auth*.py @28sunanda
+**/security*.py @28sunanda
+**/crypto*.py @28sunanda
+
+# ============================================================================
+# CI/CD - Require security review for pipeline changes
+# ============================================================================
+
+/.github/ @28sunanda
+/Makefile @28sunanda
+
+# ============================================================================
+# DEPENDENCIES - Security review for supply chain
+# ============================================================================
+
+/requirements.txt @28sunanda
+/requirements*.txt @28sunanda
+/package.json @28sunanda
+/package-lock.json @28sunanda
