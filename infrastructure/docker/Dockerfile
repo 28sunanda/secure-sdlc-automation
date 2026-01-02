@@ -6,7 +6,7 @@
 # =============================================================================
 # STAGE 1: Build Stage
 # =============================================================================
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # Set build-time environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -34,7 +34,7 @@ RUN pip install --upgrade pip && \
 # =============================================================================
 # STAGE 2: Production Stage
 # =============================================================================
-FROM python:3.11-slim-bookworm AS production
+FROM python:3.14-slim-bookworm AS production
 
 # Labels for image metadata
 LABEL maintainer="security@company.com" \
