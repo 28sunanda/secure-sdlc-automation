@@ -351,13 +351,14 @@ jobs:
           echo "⚠️ Target may be slow, proceeding anyway..."
 
       - name: OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.12.0
+        uses: zaproxy/action-baseline@v0.14.0
         with:
           target: 'https://secure-flask-api.onrender.com'
           rules_file_name: '.zap-rules.tsv'
           cmd_options: '-a -j -l WARN'
           allow_issue_writing: false
           fail_action: false
+          artifact_name: 'zap-dast-report'
 
       - name: Upload ZAP HTML Report
         uses: actions/upload-artifact@v4
