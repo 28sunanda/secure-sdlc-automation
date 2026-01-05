@@ -68,7 +68,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Gitleaks SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: results.sarif
@@ -100,7 +100,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Semgrep SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep.sarif
@@ -138,7 +138,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Bandit SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: bandit-results.sarif
@@ -220,7 +220,7 @@ jobs:
           args: --sarif-file-output=snyk-results.sarif
 
       - name: Upload Snyk SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: snyk-results.sarif
@@ -248,7 +248,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Hadolint SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: hadolint-results.sarif
@@ -269,7 +269,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -308,7 +308,7 @@ jobs:
           soft_fail: true
 
       - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: checkov-results.sarif
