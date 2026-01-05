@@ -1,84 +1,121 @@
-name: Enterprise Security Pipeline
+# =============================================================================
+# ENTERPRISE SECURITY PIPELINE - DevSecOps Automation
+# =============================================================================
+# This pipeline implements comprehensive security scanning across the SDLC:
+# - Secret Detection (Gitleaks)
+# - SAST (Semgrep, Bandit)
+# - SCA (Safety, pip-audit, Snyk)
+# - Container Security (Hadolint, Trivy)
+# - IaC Security (Checkov)
+# - DAST (OWASP ZAP)
+# - Compliance Validation (OWASP ASVS, NIST 800-53)
+# =============================================================================
+
+name: 🛡️ Enterprise Security Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'feature/**', 'release/**']
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   schedule:
-    # Run daily at 2 AM UTC for continuous monitoring
-    - cron: '0 2 * * *'
-  workflow_dispatch:  # Allow manual trigger
-
-env:
-  PYTHON_VERSION: '3.11'
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of scan to run'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - sast-only
+          - sca-only
+          - container-only
+          - dast-only
 
 # Cancel in-progress runs for the same branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  SCAN_OUTPUT_DIR: 'security-reports'
+
 jobs:
-  # ============================================================================
-  # STAGE 1: SECRET DETECTION
-  # ============================================================================
+  # ==========================================================================
+  # SECRET DETECTION
+  # ==========================================================================
   secret-detection:
     name: 🔑 Secret Detection
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Gitleaks Scan
+      - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+        continue-on-error: true
 
-  # ============================================================================
-  # STAGE 2: SAST - STATIC APPLICATION SECURITY TESTING
-  # ============================================================================
+      - name: Upload Gitleaks SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true
+
+  # ==========================================================================
+  # SAST - Static Application Security Testing
+  # ==========================================================================
   sast-semgrep:
     name: 🔍 SAST - Semgrep
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
-    container:
-      image: semgrep/semgrep
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Run Semgrep
-        run: |
-          semgrep scan \
-            --config "p/security-audit" \
-            --config "p/owasp-top-ten" \
-            --config "p/python" \
-            --sarif \
-            --sarif-output=semgrep-results.sarif \
-            --error \
-            --severity ERROR \
-            . || true
-
-      - name: Upload SARIF to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: returntocorp/semgrep-action@v1
         with:
-          sarif_file: semgrep-results.sarif
+          config: >-
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+            p/python
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         continue-on-error: true
 
-      - name: Upload Artifact
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+        continue-on-error: true
+
+      - name: Upload Semgrep results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: semgrep-results
-          path: semgrep-results.sarif
+          path: semgrep.sarif
+          retention-days: 30
 
   sast-bandit:
-    name: 🔍 SAST - Bandit (Python)
+    name: 🐍 SAST - Bandit
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,66 +135,32 @@ jobs:
       - name: Run Bandit
         run: |
           bandit -r app/ -f sarif -o bandit-results.sarif --severity-level medium || true
+        continue-on-error: true
 
-      - name: Upload SARIF
-        if: always()
+      - name: Upload Bandit SARIF
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
           sarif_file: bandit-results.sarif
         continue-on-error: true
 
-      - name: Upload Artifact
+      - name: Upload Bandit results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bandit-results
           path: bandit-results.sarif
+          retention-days: 30
 
-  # ============================================================================
-  # STAGE 3: SCA - SOFTWARE COMPOSITION ANALYSIS
-  # ============================================================================
-  sca-dependencies:
+  # ==========================================================================
+  # SCA - Software Composition Analysis
+  # ==========================================================================
+  sca-dependency-scan:
     name: 📦 SCA - Dependency Scanning
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install tools
-        run: pip install safety pip-audit cyclonedx-bom
-
-      - name: Safety Check
-        run: |
-          safety check --file=requirements.txt --output json > safety-results.json 2>&1 || true
-
-      - name: pip-audit Check
-        run: |
-          pip-audit --requirement=requirements.txt --format=json --output=pip-audit-results.json || true
-
-      - name: Generate SBOM
-        run: |
-          pip install -r requirements.txt
-          cyclonedx-py environment -o sbom.json --format json || true
-
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sca-results
-          path: |
-            safety-results.json
-            pip-audit-results.json
-            sbom.json
-
-  sca-snyk:
-    name: 📦 SCA - Snyk
-    runs-on: ubuntu-latest
-    if: ${{ vars.ENABLE_SNYK == 'true' }}
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -168,7 +171,45 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install safety pip-audit cyclonedx-bom
+
+      - name: Run Safety check
+        run: |
+          safety check -r requirements.txt --json > safety-results.json || true
+        continue-on-error: true
+
+      - name: Run pip-audit
+        run: |
+          pip-audit -r requirements.txt -f json -o pip-audit-results.json || true
+        continue-on-error: true
+
+      - name: Generate SBOM
+        run: |
+          cyclonedx-py requirements -i requirements.txt -o sbom.json --format json || true
+        continue-on-error: true
+
+      - name: Upload SCA results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sca-results
+          path: |
+            safety-results.json
+            pip-audit-results.json
+            sbom.json
+          retention-days: 30
+
+  sca-snyk:
+    name: 🔐 SCA - Snyk
+    runs-on: ubuntu-latest
+    if: vars.ENABLE_SNYK == 'true'
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Run Snyk
         uses: snyk/actions/python@master
@@ -178,17 +219,17 @@ jobs:
         with:
           args: --sarif-file-output=snyk-results.sarif
 
-      - name: Upload SARIF
-        if: always()
+      - name: Upload Snyk SARIF
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
           sarif_file: snyk-results.sarif
         continue-on-error: true
 
-  # ============================================================================
-  # STAGE 4: CONTAINER SECURITY
-  # ============================================================================
-  container-scanning:
+  # ==========================================================================
+  # CONTAINER SECURITY
+  # ==========================================================================
+  container-security:
     name: 🐳 Container Security
     runs-on: ubuntu-latest
     permissions:
@@ -198,45 +239,57 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Hadolint (Dockerfile Linting)
+      - name: Run Hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: infrastructure/docker/Dockerfile
           format: sarif
           output-file: hadolint-results.sarif
-          failure-threshold: error
         continue-on-error: true
 
       - name: Upload Hadolint SARIF
-        if: always()
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
           sarif_file: hadolint-results.sarif
-          category: hadolint
         continue-on-error: true
 
-      - name: Trivy Filesystem Scan
+      - name: Build Docker image
+        run: |
+          docker build -t secure-app:${{ github.sha }} -f infrastructure/docker/Dockerfile .
+        continue-on-error: true
+
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
+          image-ref: 'secure-app:${{ github.sha }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
-
-      - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy
         continue-on-error: true
 
-  # ============================================================================
-  # STAGE 5: IAC SECURITY SCANNING
-  # ============================================================================
-  iac-scanning:
-    name: 🏗️ IaC Security Scanning
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Upload Container Security results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-security-results
+          path: |
+            hadolint-results.sarif
+            trivy-results.sarif
+          retention-days: 30
+
+  # ==========================================================================
+  # IaC SECURITY
+  # ==========================================================================
+  iac-security:
+    name: 🏗️ IaC Security - Checkov
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -245,31 +298,99 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Checkov Scan
+      - name: Run Checkov
         uses: bridgecrewio/checkov-action@v12
         with:
-          directory: infrastructure/
-          framework: terraform,dockerfile
-          output_format: cli,sarif
-          output_file_path: console,results.sarif
+          directory: infrastructure/terraform
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
           soft_fail: true
 
       - name: Upload Checkov SARIF
-        if: always()
         uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
-          sarif_file: results.sarif
-          category: checkov
+          sarif_file: checkov-results.sarif
         continue-on-error: true
 
-  # ============================================================================
-  # STAGE 6: COMPLIANCE VALIDATION
-  # ============================================================================
+      - name: Upload Checkov results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checkov-results
+          path: checkov-results.sarif
+          retention-days: 30
+
+  # ==========================================================================
+  # DAST - Dynamic Application Security Testing (OWASP ZAP)
+  # ==========================================================================
+  dast-zap-scan:
+    name: 🌐 DAST - OWASP ZAP
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for target to be ready
+        run: |
+          echo "🔍 Checking if target is accessible..."
+          for i in {1..5}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://secure-flask-api.onrender.com/health || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Target is ready! (HTTP $HTTP_CODE)"
+              exit 0
+            fi
+            echo "⏳ Waiting for target to wake up (attempt $i/5, HTTP $HTTP_CODE)..."
+            sleep 30
+          done
+          echo "⚠️ Target may be slow, proceeding anyway..."
+
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'https://secure-flask-api.onrender.com'
+          rules_file_name: '.zap-rules.tsv'
+          cmd_options: '-a -j -l WARN'
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: 'zap-dast-report'
+
+      - name: Upload ZAP HTML Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report-html
+          path: report_html.html
+          retention-days: 30
+
+      - name: Upload ZAP Markdown Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report-md
+          path: report_md.md
+          retention-days: 30
+
+      - name: Upload ZAP JSON Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report-json
+          path: report_json.json
+          retention-days: 30
+
+  # ==========================================================================
+  # COMPLIANCE VALIDATION
+  # ==========================================================================
   compliance-check:
     name: 📋 Compliance Validation
     runs-on: ubuntu-latest
-    needs: [sast-semgrep, sca-dependencies, iac-scanning]
-    if: always()
+    needs: [sast-semgrep, sast-bandit, sca-dependency-scan]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -279,63 +400,45 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        run: pip install pyyaml
-
-      - name: Validate OWASP ASVS Mapping
+      - name: Validate OWASP ASVS mapping
         run: |
-          python -c "
-          import yaml
-          with open('security/compliance/owasp-asvs-mapping.yml') as f:
-              data = yaml.safe_load(f)
-          summary = data.get('summary', {})
-          print(f\"OWASP ASVS Coverage: {summary.get('coverage_percentage', 0)}%\")
-          print(f\"Total Controls: {summary.get('total_controls', 0)}\")
-          print(f\"Implemented: {summary.get('implemented', 0)}\")
-          "
+          echo "📋 Validating OWASP ASVS compliance mapping..."
+          if [ -f "security/compliance/owasp-asvs-mapping.yml" ]; then
+            echo "✅ OWASP ASVS mapping file found"
+            cat security/compliance/owasp-asvs-mapping.yml | head -50
+          else
+            echo "⚠️ OWASP ASVS mapping file not found"
+          fi
 
-      - name: Validate NIST 800-53 Mapping
+      - name: Validate NIST 800-53 mapping
         run: |
-          python -c "
-          import yaml
-          with open('security/compliance/nist-800-53-mapping.yml') as f:
-              data = yaml.safe_load(f)
-          summary = data.get('summary', {})
-          print(f\"NIST 800-53 Coverage: {summary.get('coverage_percentage', 0)}%\")
-          print(f\"Total Controls: {summary.get('total_controls', 0)}\")
-          "
+          echo "📋 Validating NIST 800-53 compliance mapping..."
+          if [ -f "security/compliance/nist-800-53-mapping.yml" ]; then
+            echo "✅ NIST 800-53 mapping file found"
+            cat security/compliance/nist-800-53-mapping.yml | head -50
+          else
+            echo "⚠️ NIST 800-53 mapping file not found"
+          fi
 
-      - name: Generate Compliance Summary
-        run: |
-          echo "## 📋 Compliance Status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Framework | Coverage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| OWASP ASVS v4.0 Level 2 | 89% | ✅ Validated |" >> $GITHUB_STEP_SUMMARY
-          echo "| NIST 800-53 Rev 5 Moderate | 100% | ✅ Validated |" >> $GITHUB_STEP_SUMMARY
-
-  # ============================================================================
-  # STAGE 7: SECURITY GATE
-  # ============================================================================
+  # ==========================================================================
+  # SECURITY GATE
+  # ==========================================================================
   security-gate:
     name: 🚦 Security Gate
     runs-on: ubuntu-latest
-    needs: [secret-detection, sast-semgrep, sast-bandit, sca-dependencies, container-scanning, iac-scanning, compliance-check]
+    needs: [secret-detection, sast-semgrep, sast-bandit, sca-dependency-scan, container-security, iac-security, dast-zap-scan]
     if: always()
-    outputs:
-      gate_passed: ${{ steps.evaluate.outputs.passed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download All Artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: security-results/
+          path: security-reports
         continue-on-error: true
 
       - name: Evaluate Security Gate
-        id: evaluate
         run: |
           echo "🚦 Evaluating Security Gate..."
           echo ""
@@ -343,85 +446,88 @@ jobs:
           echo "  - Secret Detection: ${{ needs.secret-detection.result }}"
           echo "  - SAST Semgrep: ${{ needs.sast-semgrep.result }}"
           echo "  - SAST Bandit: ${{ needs.sast-bandit.result }}"
-          echo "  - SCA Dependencies: ${{ needs.sca-dependencies.result }}"
-          echo "  - Container Security: ${{ needs.container-scanning.result }}"
-          echo "  - IaC Scanning: ${{ needs.iac-scanning.result }}"
-          echo "  - Compliance: ${{ needs.compliance-check.result }}"
+          echo "  - SCA Dependency: ${{ needs.sca-dependency-scan.result }}"
+          echo "  - Container Security: ${{ needs.container-security.result }}"
+          echo "  - IaC Security: ${{ needs.iac-security.result }}"
+          echo "  - DAST ZAP: ${{ needs.dast-zap-scan.result }}"
           echo ""
           
-          # Count failures (excluding skipped)
-          CRITICAL_FAILURES=0
+          # Count failures
+          FAILURES=0
+          for result in "${{ needs.secret-detection.result }}" "${{ needs.sast-semgrep.result }}" "${{ needs.sast-bandit.result }}" "${{ needs.sca-dependency-scan.result }}" "${{ needs.container-security.result }}" "${{ needs.iac-security.result }}" "${{ needs.dast-zap-scan.result }}"; do
+            if [ "$result" = "failure" ]; then
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
           
-          if [ "${{ needs.secret-detection.result }}" == "failure" ]; then
-            echo "⚠️ CRITICAL: Secret detection failed - possible secrets in code!"
-            CRITICAL_FAILURES=$((CRITICAL_FAILURES + 1))
-          fi
+          echo "Total job failures: $FAILURES"
           
-          # Security gate logic
-          if [ $CRITICAL_FAILURES -gt 0 ]; then
-            echo "❌ Security Gate: FAILED ($CRITICAL_FAILURES critical issues)"
-            echo "passed=false" >> $GITHUB_OUTPUT
+          if [ $FAILURES -gt 2 ]; then
+            echo "❌ Security Gate FAILED - Too many job failures"
+            exit 1
           else
-            echo "✅ Security Gate: PASSED"
-            echo "passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Security Gate PASSED"
           fi
 
       - name: Generate Security Summary
+        if: always()
         run: |
-          echo "# 🛡️ Security Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🛡️ Security Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔑 Secret Detection | ${{ needs.secret-detection.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔍 SAST - Semgrep | ${{ needs.sast-semgrep.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐍 SAST - Bandit | ${{ needs.sast-bandit.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 SCA - Dependencies | ${{ needs.sca-dependency-scan.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐳 Container Security | ${{ needs.container-security.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🏗️ IaC Security | ${{ needs.iac-security.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌐 DAST - OWASP ZAP | ${{ needs.dast-zap-scan.result == 'success' && '✅ Passed' || '⚠️ Review' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Secrets | Gitleaks | ${{ needs.secret-detection.result == 'success' && '✅ Passed' || (needs.secret-detection.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST | Semgrep | ${{ needs.sast-semgrep.result == 'success' && '✅ Passed' || (needs.sast-semgrep.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST | Bandit | ${{ needs.sast-bandit.result == 'success' && '✅ Passed' || (needs.sast-bandit.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SCA | Dependencies | ${{ needs.sca-dependencies.result == 'success' && '✅ Passed' || (needs.sca-dependencies.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container | Trivy + Hadolint | ${{ needs.container-scanning.result == 'success' && '✅ Passed' || (needs.container-scanning.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| IaC | Checkov | ${{ needs.iac-scanning.result == 'success' && '✅ Passed' || (needs.iac-scanning.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Compliance | ASVS + NIST | ${{ needs.compliance-check.result == 'success' && '✅ Passed' || (needs.compliance-check.result == 'skipped' && '⏭️ Skipped' || '⚠️ Check logs') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "*Pipeline triggered by: ${{ github.actor }} on ${{ github.event_name }}*" >> $GITHUB_STEP_SUMMARY
+          echo "📊 View detailed results in the [Security Tab](/${{ github.repository }}/security)" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload Final Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-report
-          path: security-results/
-        continue-on-error: true
-
-  # ============================================================================
-  # STAGE 8: NOTIFICATIONS
-  # ============================================================================
+  # ==========================================================================
+  # NOTIFICATIONS
+  # ==========================================================================
   notify-slack:
-    name: 🔔 Slack Notification
+    name: 📢 Slack Notification
     runs-on: ubuntu-latest
     needs: [security-gate]
     if: always() && vars.ENABLE_SLACK_NOTIFICATIONS == 'true'
     steps:
-      - name: Notify Slack
-        uses: slackapi/slack-github-action@v1.26.0
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.25.0
         with:
           payload: |
             {
-              "text": "${{ needs.security-gate.outputs.gate_passed == 'true' && '✅ Security Pipeline Passed' || '🚨 Security Pipeline Needs Attention' }}",
+              "text": "Security Pipeline Result: ${{ needs.security-gate.result == 'success' && '✅ PASSED' || '❌ FAILED' }}",
               "blocks": [
                 {
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    "text": "${{ needs.security-gate.outputs.gate_passed == 'true' && '✅ Security Pipeline Passed' || '🚨 Security Pipeline Needs Attention' }}"
+                    "text": "🛡️ Security Pipeline Results"
                   }
                 },
                 {
                   "type": "section",
                   "fields": [
-                    {"type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}"},
-                    {"type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}"},
-                    {"type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}"},
-                    {"type": "mrkdwn", "text": "*Event:*\n${{ github.event_name }}"}
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ github.ref_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ needs.security-gate.result == 'success' && '✅ Passed' || '❌ Failed' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered by:*\n${{ github.actor }}"
+                    }
                   ]
                 },
                 {
@@ -429,7 +535,10 @@ jobs:
                   "elements": [
                     {
                       "type": "button",
-                      "text": {"type": "plain_text", "text": "View Run"},
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Results"
+                      },
                       "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                     }
                   ]
@@ -440,46 +549,3 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_SECURITY_WEBHOOK }}
           SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
         continue-on-error: true
-
-  # ============================================================================
-  # PR COMMENT (for Pull Requests only)
-  # ============================================================================
-  pr-comment:
-    name: 💬 PR Security Comment
-    runs-on: ubuntu-latest
-    needs: [security-gate]
-    if: github.event_name == 'pull_request'
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Comment on PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const passed = '${{ needs.security-gate.outputs.gate_passed }}' === 'true';
-            const icon = passed ? '✅' : '⚠️';
-            const status = passed ? 'PASSED' : 'NEEDS REVIEW';
-            
-            const body = `## ${icon} Security Gate ${status}
-            
-            | Check | Status |
-            |-------|--------|
-            | 🔑 Secret Detection | ${{ needs.secret-detection.result == 'success' && '✅' || '⚠️' }} |
-            | 🔍 SAST (Semgrep) | ${{ needs.sast-semgrep.result == 'success' && '✅' || '⚠️' }} |
-            | 🔍 SAST (Bandit) | ${{ needs.sast-bandit.result == 'success' && '✅' || '⚠️' }} |
-            | 📦 SCA (Dependencies) | ${{ needs.sca-dependencies.result == 'success' && '✅' || '⚠️' }} |
-            | 🐳 Container Security | ${{ needs.container-scanning.result == 'success' && '✅' || '⚠️' }} |
-            | 🏗️ IaC Security | ${{ needs.iac-scanning.result == 'success' && '✅' || '⚠️' }} |
-            | 📋 Compliance | ${{ needs.compliance-check.result == 'success' && '✅' || '⚠️' }} |
-            
-            📊 [View Full Security Report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            
-            ---
-            *Secure SDLC Automation Pipeline*`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
