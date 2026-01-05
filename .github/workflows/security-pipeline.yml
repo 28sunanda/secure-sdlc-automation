@@ -496,7 +496,7 @@ jobs:
     if: always() && vars.ENABLE_SLACK_NOTIFICATIONS == 'true'
     steps:
       - name: Send Slack notification
-        uses: slackapi/slack-github-action@v1.25.0
+        uses: slackapi/slack-github-action@v2.1.1
         with:
           payload: |
             {
