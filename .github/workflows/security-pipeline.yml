@@ -351,7 +351,7 @@ jobs:
           echo "⚠️ Target may be slow, proceeding anyway..."
 
       - name: OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: 'https://secure-flask-api.onrender.com'
           rules_file_name: '.zap-rules.tsv'
